@@ -1,0 +1,16 @@
+## Configuration for the training, evaluation
+samples:
+  - name: 4top
+    label: 1
+    path: /data/swkim/4top_weight_1/*.h5
+    xsec: 0.012
+    ngen: 11952188
+  - name: ttbar
+    label: 0
+    path: /data/swkim/ttbar_hdf5_image_final/*/*/*.h5
+    xsec: 377.96
+    ngen: 333332000
+training:
+    randomSeed1: 123456
+    nDataLoaders: 4
+
