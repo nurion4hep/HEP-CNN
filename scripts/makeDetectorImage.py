@@ -122,9 +122,10 @@ class FileSplitOut:
             images_e = getImage(src_towers_Eem[begin:end], src_towers_eta[begin:end], src_towers_phi[begin:end], [self.width, self.height])
             images_t = getImage(src_tracks_pt[begin:end], src_tracks_eta[begin:end], src_tracks_phi[begin:end], [self.width, self.height])
             
-            images_h = 1000 * images_h
-            images_e = 1000 * images_e
-            if not args.dotrackcount: images_t = 1000 * images_t
+			# -- GEV * 1000 
+            #images_h = 1000 * images_h
+            #images_e = 1000 * images_e
+            #if not args.dotrackcount: images_t = 1000 * images_t
 
             images_h = np.expand_dims(images_h, self.chAxis)
             images_e = np.expand_dims(images_e, self.chAxis)
