@@ -1,0 +1,37 @@
+## Configuration for the training, evaluation
+samples:
+  - name: 4top
+    label: 1
+    path: /data/swkim/4top_weight_1/*.h5
+    xsec: 0.012
+    ngen: 11952188
+  - name: ttbar
+    label: 0
+    path: /data/swkim/ttbar_hdf5_image_final/*/*/*.h5
+    xsec: 377.96
+    ngen: 333332000
+  - name: QCD_HT700to1000
+    label: 0
+    path: /data/swkim/QCD700_chunk1/*.h5
+    ignore: true
+    xsec: 6330
+    ngen: 48158738
+  - name: QCD_HT1000to1500
+    label: 0
+    path: /data/swkim/QCD1000_chunk1/*.h5
+    xsec: 1090
+    ngen: 15466225
+  - name: QCD_HT1500to2000
+    label: 0
+    path: /data/swkim/QCD1500_chunk1/*.h5
+    xsec: 99.1
+    ngen: 10955087
+  - name: QCD_HT2000toInf
+    label: 0
+    path: /data/swkim/QCD2000_chunk1/*.h5
+    xsec: 20.2
+    ngen: 5475677
+training:
+    randomSeed1: 123456
+    nDataLoaders: 4
+
