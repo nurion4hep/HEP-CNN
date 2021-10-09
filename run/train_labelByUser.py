@@ -16,12 +16,10 @@ try:
 except:
     hvd = None
 
-## Investigate server
 nthreads = int(os.popen('nproc').read()) ## nproc takes allowed # of processes. Returns OMP_NUM_THREADS if set
 print("NTHREADS=", nthreads, "CPU_COUNT=", os.cpu_count())
 torch.set_num_threads(nthreads)
 
-## Make argument parser
 parser = argparse.ArgumentParser()
 parser.add_argument('--epoch', action='store', type=int, default=50, help='Number of epochs')
 parser.add_argument('--batch', action='store', type=int, default=128, help='Batch size')
@@ -48,10 +46,8 @@ parser.add_argument('--abs', action='store_true', default=False, help='if true, 
 
 args = parser.parse_args()
 
-## Load config file to read train data info
 config = yaml.load(open(args.config).read(), Loader=yaml.FullLoader)
 
-## horovod setup
 hvd_rank, hvd_size = 0, 1
 if hvd:
     hvd.init()
@@ -61,7 +57,6 @@ if hvd:
     if torch.cuda.is_available(): torch.cuda.set_device(hvd.local_rank())
 if torch.cuda.is_available() and args.device >= 0: torch.cuda.set_device(args.device)
 
-## Setup result file I/O directories
 if not os.path.exists(args.outdir): os.makedirs(args.outdir)
 modelFile = os.path.join(args.outdir, 'model.pth')
 weightFile = os.path.join(args.outdir, 'weight_%d.pth' % hvd_rank)
@@ -89,12 +84,10 @@ from monitor_proc import SysStat
 sysstat = SysStat(os.getpid(), fileName=resourceByCPFile)
 sysstat.update(annotation="start_loggin")
 
-## Start loading data
 sys.path.append("../python")
 from HEPCNN.dataset_hepcnn import HEPCNNDataset as MyDataset
 
 sysstat.update(annotation="add samples")
-print("Start loading samples")
 myDataset = MyDataset()
 for sampleInfo in config['samples']:
     if 'ignore' in sampleInfo and sampleInfo['ignore']: continue
@@ -102,7 +95,6 @@ for sampleInfo in config['samples']:
     myDataset.addSample(name, sampleInfo['path'], weight=sampleInfo['xsec']/sampleInfo['ngen'])
     myDataset.setProcessLabel(name, sampleInfo['label'])
 sysstat.update(annotation="init dataset")
-print("Start initializing dataset")
 myDataset.initialize(logger=sysstat)
 
 sysstat.update(annotation="split dataset")
@@ -135,14 +127,12 @@ else:
     from HEPCNN.model_default import MyModel
 model = MyModel(myDataset.width, myDataset.height, model=args.model)
 
-## Decide which device to use (cpu or gpu)
 if hvd_rank == 0: torch.save(model, modelFile)
 device = 'cpu'
 if args.device >= 0 and torch.cuda.is_available():
     model = model.cuda()
     device = 'cuda'
 
-# Decide optimizer
 if args.optimizer == 'radam':
     from optimizers.RAdam import RAdam
     optm = RAdam(model.parameters(), lr=args.lr)
@@ -165,14 +155,12 @@ else:
     print("Cannot find optimizer in the list")
     exit()
 
-# Decide whether to use LARS or not (LARS not working with horovod)
 if args.lars == True:
     from optimizers.lars import LARS
     optm_base = optm
     optm = LARS(optimizer=optm_base)
     print("Using LARS with base optimizer %s"%(args.optimizer))
 
-## Additional horovod setup
 if hvd:
     compression = hvd.Compression.none
     optm = hvd.DistributedOptimizer(optm,
@@ -186,7 +174,6 @@ def metric_average(val, name):
     avg_tensor = hvd.allreduce(tensor, name=name)
     return avg_tensor.item()
 
-## Finishing train setup
 sysstat.update(annotation="modelsetup_done")
 
 with open(args.outdir+'/summary.txt', 'w') as fout:
@@ -195,7 +182,6 @@ with open(args.outdir+'/summary.txt', 'w') as fout:
     fout.write(str(model))
     fout.close()
 
-## Start training
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score
 bestWeight, bestLoss = {}, 1e9
@@ -204,11 +190,9 @@ try:
     timeHistory.on_train_begin()
     sysstat.update(annotation="train_start")
     history = {'time':[], 'loss':[], 'acc':[], 'val_loss':[], 'val_acc':[]}
-    ## Start each epoch
     for epoch in range(args.epoch):
         timeHistory.on_epoch_begin()
         sysstat.update(annotation='epoch_begin')
-        ## Start train step
         model.train()
         trn_loss, trn_acc = 0., 0.
         optm.zero_grad()
@@ -217,7 +201,6 @@ try:
             data = data.float().to(device)
             label = label.float().to(device)
             rescale = rescale.float().to(device)
-            #weight = weight.float().to(device) * rescale
             rescaledWeight = evtWeight.float().to(device)*rescale
 
             if(args.abs) : rescaledWeight = torch.abs(rescaledWeight)
@@ -237,14 +220,12 @@ try:
             sysstat.update()
         trn_loss /= len(trnLoader)
         trn_acc  /= len(trnLoader)
-        ## Start validation step
         model.eval()
         val_loss, val_acc = 0., 0.
         for i, (data, label, _, rescale, procIdx, evtWeight) in enumerate(tqdm(valLoader)):
             data = data.float().to(device)
             label = label.float().to(device)
             rescale = rescale.float().to(device)
-            #weight = weight.float().to(device)*rescale
             rescaledWeight = evtWeight.float().to(device)*rescale
 
             if(args.abs) : rescaledWeight = torch.abs(rescaledWeight)
