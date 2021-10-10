@@ -123,7 +123,7 @@ class HEPCNNDataset(Dataset):
         #### Find rescale factors - make weight to be 1 for each cat in the training step
         for fileIdx in self.sampleInfo['fileIdx']:
             label = self.sampleInfo.loc[self.sampleInfo.fileIdx==fileIdx, 'label']
-            w = self.sampleInfo.loc[self.sampleInfo.fileIdx==fileIdx, 'weight']
+            w = (self.sampleInfo.loc[self.sampleInfo.fileIdx==fileIdx, 'weight'].unique())[0]
             for l in label: ## this loop runs only once, by construction.
                 self.rescaleList[fileIdx] *= (w * (1/sumWByLabel[l])*(sumEByLabel[l])*(sumEByLabel[maxSumELabel]/sumEByLabel[l]) )
                 break ## this loop runs only once, by construction. this break is just for a confirmation
