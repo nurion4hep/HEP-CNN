@@ -22,7 +22,7 @@ torch.set_num_threads(nthreads)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--epoch', action='store', type=int, default=50, help='Number of epochs')
-parser.add_argument('--batch', action='store', type=int, default=256, help='Batch size')
+parser.add_argument('--batch', action='store', type=int, default=128, help='Batch size')
 parser.add_argument('-o', '--outdir', action='store', type=str, required=True, help='Path to output directory')
 parser.add_argument('--lr', action='store', type=float, default=1e-3, help='Learning rate')
 parser.add_argument('--batchPerStep', action='store', type=int, default=1, help='Number of batches per step (to emulate all-reduce)')
@@ -42,8 +42,10 @@ parser.add_argument('--device', action='store', type=int, default=0, help='devic
 parser.add_argument('-c', '--config', action='store', type=str, default='config.yaml', help='Configration file with sample information')
 parser.add_argument('--lars','-l', action='store', type=bool, default=False, help='Use LARS optimizer')
 parser.add_argument('--noperfmon', action='store_true', default=False, help='turn off performance monitoring')
+parser.add_argument('--abs', action='store_true', default=False, help='if true, use absoulute value for weight')
 
 args = parser.parse_args()
+
 config = yaml.load(open(args.config).read(), Loader=yaml.FullLoader)
 
 hvd_rank, hvd_size = 0, 1
@@ -52,7 +54,6 @@ if hvd:
     hvd_rank = hvd.rank()
     hvd_size = hvd.size()
     print("Horovod is available. (rank=%d size=%d)" % (hvd_rank, hvd_size))
-    #torch.manual_seed(args.seed)
     if torch.cuda.is_available(): torch.cuda.set_device(hvd.local_rank())
 if torch.cuda.is_available() and args.device >= 0: torch.cuda.set_device(args.device)
 
@@ -70,7 +71,7 @@ if not args.noperfmon:
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 import time
-class TimeHistory():#tf.keras.callbacks.Callback):
+class TimeHistory():
     def on_train_begin(self):
         self.times = []
     def on_epoch_begin(self):
@@ -104,10 +105,6 @@ trnDataset, valDataset, testDataset = torch.utils.data.random_split(myDataset, l
 torch.manual_seed(torch.initial_seed())
 
 kwargs = {'num_workers':min(config['training']['nDataLoaders'], nthreads), 'pin_memory':False}
-#kwargs = {'pin_memory':True}
-#if torch.cuda.is_available():
-#    #if hvd: kwargs['num_workers'] = 1
-#    kwargs['pin_memory'] = True
 
 if hvd:
     trnSampler = torch.utils.data.distributed.DistributedSampler(trnDataset, num_replicas=hvd_size, rank=hvd_rank)
@@ -116,7 +113,6 @@ if hvd:
     valLoader = DataLoader(valDataset, batch_size=args.batch, sampler=valSampler, **kwargs)
 else:
     trnLoader = DataLoader(trnDataset, batch_size=args.batch, shuffle=args.shuffle, **kwargs)
-    #valLoader = DataLoader(valDataset, batch_size=args.batch, shuffle=args.shuffle, **kwargs)
     valLoader = DataLoader(valDataset, batch_size=args.batch, shuffle=False, **kwargs)
 
 ## Build model
@@ -130,6 +126,7 @@ elif 'circpad' in args.model:
 else:
     from HEPCNN.model_default import MyModel
 model = MyModel(myDataset.width, myDataset.height, model=args.model)
+
 if hvd_rank == 0: torch.save(model, modelFile)
 device = 'cpu'
 if args.device >= 0 and torch.cuda.is_available():
@@ -164,10 +161,8 @@ if args.lars == True:
     optm = LARS(optimizer=optm_base)
     print("Using LARS with base optimizer %s"%(args.optimizer))
 
-
 if hvd:
     compression = hvd.Compression.none
-    #compression = hvd.Compression.fp16 #if args.fp16_allreduce else hvd.Compression.none
     optm = hvd.DistributedOptimizer(optm,
                                     named_parameters=model.named_parameters(),
                                     compression=compression, backward_passes_per_step=args.batch)
@@ -195,22 +190,23 @@ try:
     timeHistory.on_train_begin()
     sysstat.update(annotation="train_start")
     history = {'time':[], 'loss':[], 'acc':[], 'val_loss':[], 'val_acc':[]}
-
     for epoch in range(args.epoch):
         timeHistory.on_epoch_begin()
         sysstat.update(annotation='epoch_begin')
-
         model.train()
         trn_loss, trn_acc = 0., 0.
         optm.zero_grad()
-        for i, (data, label, weight, rescale, procIdx) in enumerate(tqdm(trnLoader, desc='epoch %d/%d' % (epoch+1, args.epoch))):
+
+        for i, (data, label, _, rescale, procIdx, evtWeight) in enumerate(tqdm(trnLoader, desc='epoch %d/%d' % (epoch+1, args.epoch))):
             data = data.float().to(device)
             label = label.float().to(device)
             rescale = rescale.float().to(device)
-            weight = weight.float().to(device)*rescale
+            rescaledWeight = evtWeight.float().to(device)*rescale
+
+            if(args.abs) : rescaledWeight = torch.abs(rescaledWeight)
 
             pred = model(data)
-            crit = torch.nn.BCEWithLogitsLoss(weight=weight)
+            crit = torch.nn.BCEWithLogitsLoss(weight=rescaledWeight)
             if device == 'cuda': crit = crit.cuda()
             l = crit(pred.view(-1), label)
             l.backward()
@@ -219,26 +215,27 @@ try:
                 optm.zero_grad()
 
             trn_loss += l.item()
-            trn_acc += accuracy_score(label.to('cpu'), np.where(pred.to('cpu') > 0.5, 1, 0), sample_weight=weight.to('cpu'))
+            trn_acc += accuracy_score(label.to('cpu'), np.where(pred.to('cpu') > 0.5, 1, 0), sample_weight=rescaledWeight.to('cpu'))
 
             sysstat.update()
         trn_loss /= len(trnLoader)
         trn_acc  /= len(trnLoader)
-
         model.eval()
         val_loss, val_acc = 0., 0.
-        for i, (data, label, weight, rescale, procIdx) in enumerate(tqdm(valLoader)):
+        for i, (data, label, _, rescale, procIdx, evtWeight) in enumerate(tqdm(valLoader)):
             data = data.float().to(device)
             label = label.float().to(device)
             rescale = rescale.float().to(device)
-            weight = weight.float().to(device)*rescale
+            rescaledWeight = evtWeight.float().to(device)*rescale
+
+            if(args.abs) : rescaledWeight = torch.abs(rescaledWeight)
 
             pred = model(data)
-            crit = torch.nn.BCEWithLogitsLoss(weight=weight)
+            crit = torch.nn.BCEWithLogitsLoss(weight=rescaledWeight)
             loss = crit(pred.view(-1), label)
 
             val_loss += loss.item()
-            val_acc += accuracy_score(label.to('cpu'), np.where(pred.to('cpu') > 0.5, 1, 0), sample_weight=weight.to('cpu'))
+            val_acc += accuracy_score(label.to('cpu'), np.where(pred.to('cpu') > 0.5, 1, 0), sample_weight=rescaledWeight.to('cpu'))
         val_loss /= len(valLoader)
         val_acc  /= len(valLoader)
 
